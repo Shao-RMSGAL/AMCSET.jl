@@ -1,0 +1,11 @@
+paned > separator{
+   background-color: transparent;
+   min-width: 10px;
+}
+paned > separator:hover {
+   background-color: gray;
+}
+
+window {
+    background-color: white;
+}   
