@@ -2,6 +2,7 @@ module AMCSET
 
 using Gtk4, Gtk4.GLib
 using CairoMakie
+using OrderedCollections
 using Distributed
 
 include("functions.jl")
@@ -19,7 +20,7 @@ function configure_window(window; title = "AMCSET.jl", width = 1200, height = 90
 end
 
 function create_entries(submit_button)
-    entries = Dict([
+    entries = OrderedDict([
         (
             "incident_mass",
             EntryGroup(
@@ -38,7 +39,7 @@ function create_entries(submit_button)
             EntryGroup(
                 GtkLabel("Incident Particle Energy"),
                 GtkEntry(),
-                GtkLabel("keV"),
+                GtkLabel("eV"),
                 100,
             ),
         ),
@@ -66,7 +67,7 @@ function create_entries(submit_button)
         ),
         (
             "bombardments_count",
-            EntryGroup(GtkLabel("Bombardment Count"), GtkEntry(), GtkLabel("particles"), 1.0),
+            EntryGroup(GtkLabel("Bombardment Count"), GtkEntry(), GtkLabel("particles"), 1),
         ),
     ])
     # Create columns
@@ -146,7 +147,7 @@ function build_canvas()
     config = CairoMakie.ScreenConfig(1.0, 1.0, :good, true, false, nothing)
     CairoMakie.activate!()
     f = Figure()
-    ax = Axis(f[1, 1], xlabel = "x (Å)", ylabel = "y (Å)")
+    ax = Axis3(f[1, 1], xlabel = "x (Å)", ylabel = "y (Å)", zlabel = "z (Å)")
 
     return canvas, config, f, ax
 end
@@ -169,12 +170,26 @@ function connect_actions(window, parameters::Dict)
         end
 
         function draw_line(ax, canvas)
-            x = 0:0.1:10
-            y = randn(length(x)) .* x
-            lines!(ax, x, y)
+            M₁ = parsed_values[][1]
+            M₂ = parsed_values[][2]
+            E = parsed_values[][3]
+            Z₁ = parsed_values[][4]
+            Z₂ = parsed_values[][5]
+            ρ_sub = parsed_values[][6]
+            count = parsed_values[][7]
+
+            print("Simulation: ")
+            res = @time run_simulation(Z₁, Z₂, M₁, M₂, E, ρ_sub, count)
+            print("Plotting: ")
+            @time for coords in res
+                lines!(ax, coords)
+            end
+            print("Display: ")
+            @time begin
             CairoMakie.autolimits!(ax)
             canvas.draw(canvas)
             reveal(canvas)
+        end
         end
 
         @spawnat :any begin
@@ -182,18 +197,8 @@ function connect_actions(window, parameters::Dict)
             spinner.spinning = true
             println("Submitted values: ", parsed_values[])
             progress_bar.fraction = 0.0
-            sleep(0.25)
             draw_line(ax, canvas)
-            progress_bar.fraction = 0.25
             Gtk4.pulse(progress_bar)
-            sleep(0.25)
-            draw_line(ax, canvas)
-            progress_bar.fraction = 0.5
-            sleep(0.25)
-            draw_line(ax, canvas)
-            progress_bar.fraction = 0.75
-            sleep(0.25)
-            draw_line(ax, canvas)
             spinner.spinning = false
             progress_bar.fraction = 1.0
             set_gtk_property!(submit_button, :sensitive, true)
@@ -296,5 +301,3 @@ function julia_main()::Cint
 end
 
 end
-
-AMCSET.julia_main()

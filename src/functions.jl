@@ -4,6 +4,7 @@ using ForwardDiff
 using Plots
 using Roots
 using LinearAlgebra
+using Distributed
 
 # Reduced mass
 #   M₁ = Incident mass (u)
@@ -318,43 +319,52 @@ end
 # num = Number of simulations
 # return = Vector of vector of positions, one for each particle
 function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
+    res_lock = ReentrantLock()
     N = ustrip(AvogadroConstant) * ρ_sub / M₂ / 1E24 # atoms/Å³
     
     res = Vector{Vector{Tuple{Float64, Float64, Float64}}}()
-    
+    s_vec = Vector{Future}()
+
     for i in 1:num
-        pos = (0.0, 0.0, 0.0)
-        αᵢ₋₁ = 0
-        ϕᵢ₋₁ = 0
-        vec = [pos]
-        E = E_init
-        while (E > displacement_threshold)
-            V₀_val = V₀(E, M₁)
-            Mc_val = Mc(M₁, M₂)
-            Ec_val = Ec(Mc_val, V₀_val)
-            V_func = V(Φᵤ, Z₁, Z₂)
-            dV_func = dV(V_func)
-            a_val = aᵤ(Z₁, Z₂)
-            ε_val = ε(a_val, Ec_val, Z₁, Z₂)
-            L_val = L(M₁, M₂, ε_val, a_val, N)
-            p_val = p(N, L_val, ε_val)
-            d_val = d(Z₁, Z₂, Mc_val, V₀_val)
-            r₀_val = r₀(V_func, Ec_val, p_val, d_val)
-            ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
-            Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
-            Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
-            T_val = T(M₁, M₂, E, Θ_val)
-            E = E - T_val
-            ϑ_val = ϑ(Θ_val, M₁, M₂)
-            (αᵢ₋₁, ϕᵢ₋₁, _, _) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
-            pos = (
-            pos[1] + L_val * sin(αᵢ₋₁) * cos(ϕᵢ₋₁),
-            pos[2] + L_val * sin(αᵢ₋₁) * sin(ϕᵢ₋₁),
-            pos[3] + L_val * cos(αᵢ₋₁),
-            )
-            push!(vec, pos)
+        s = @spawnat :any begin
+            pos = (0.0, 0.0, 0.0)
+            αᵢ₋₁ = 0
+            ϕᵢ₋₁ = 0
+            vec = [pos]
+            E = E_init
+            while (E > displacement_threshold)
+                V₀_val = V₀(E, M₁)
+                Mc_val = Mc(M₁, M₂)
+                Ec_val = Ec(Mc_val, V₀_val)
+                V_func = V(Φᵤ, Z₁, Z₂)
+                dV_func = dV(V_func)
+                a_val = aᵤ(Z₁, Z₂)
+                ε_val = ε(a_val, Ec_val, Z₁, Z₂)
+                L_val = L(M₁, M₂, ε_val, a_val, N)
+                p_val = p(N, L_val, ε_val)
+                d_val = d(Z₁, Z₂, Mc_val, V₀_val)
+                r₀_val = r₀(V_func, Ec_val, p_val, d_val)
+                ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
+                Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
+                Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
+                T_val = T(M₁, M₂, E, Θ_val)
+                E = E - T_val
+                ϑ_val = ϑ(Θ_val, M₁, M₂)
+                (αᵢ₋₁, ϕᵢ₋₁, _, _) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
+                pos = (
+                pos[1] + L_val * sin(αᵢ₋₁) * cos(ϕᵢ₋₁),
+                pos[2] + L_val * sin(αᵢ₋₁) * sin(ϕᵢ₋₁),
+                pos[3] + L_val * cos(αᵢ₋₁),
+                )
+                push!(vec, pos)
+            end
+            @lock res_lock push!(res, vec)
         end
-        push!(res, vec)
+        push!(s_vec, s)
+    end
+
+    for future in s_vec
+        wait(future) 
     end
 
     return res
