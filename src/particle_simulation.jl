@@ -154,7 +154,7 @@ function recoil(incident_particle::Particle, substrate::Substrate, impact_parame
     end
 
     cosplusmass = cos(calpha1) + M₁ / M₂
-    if cosplusmass < 0
+    if cosplusmass == 0
         θ₁ᵣ = π / 2
     elseif cosplusmass < 0
         θ₁ᵣ = π + atan(sin(calpha1) / cosplusmass)
@@ -162,7 +162,7 @@ function recoil(incident_particle::Particle, substrate::Substrate, impact_parame
         θ₁ᵣ = atan(sin(calpha1) / cosplusmass)
     end
 
-    re = 4 * EC * MC / M₁ * sin(calpha1 / 2) * sin(calpha1 / 2)
+    re = 4 * EC * MC / M₂ * sin(calpha1 / 2)^2
     θ₂ᵣ = (π - calpha1) / 2
 
     return θ₁ᵣ, θ₂ᵣ, re
@@ -174,17 +174,9 @@ function amagic(incident_particle, θ₁ᵣ, θ₂ᵣ)
     θ₀ = incident_particle.velocity.θ
     α₀ = incident_particle.velocity.ϕ
 
-    X1 = sin(θ₁ᵣ) * cos(α₁ᵣ)
-    Y1 = sin(θ₁ᵣ) * sin(α₁ᵣ)
-    Z1 = cos(θ₁ᵣ)
-
-    Y0 = Y1 * cos(θ₀) + Z1 * sin(θ₀)
-    Z0 = -Y1 * sin(θ₀) + Z1 * cos(θ₀)
-    X0 = X1
-
-    Z = Z0
-    X = X0 * sin(α₀) + Y0 * cos(α₀)
-    Y = -X0 * cos(α₀) + Y0 * sin(α₀)
+    X = sin(θ₁ᵣ) * cos(α₁ᵣ) * sin(α₀) + sin(θ₁ᵣ) * sin(α₁ᵣ) * cos(θ₀) + cos(θ₁ᵣ) * sin(θ₀) * cos(α₀)
+    Y = -sin(θ₁ᵣ) * cos(α₁ᵣ) * cos(α₀) + sin(θ₁ᵣ) * sin(α₁ᵣ) * cos(θ₀) + cos(θ₁ᵣ) * sin(θ₀) * sin(α₀)
+    Z =-sin(θ₁ᵣ) * sin(α₁ᵣ) * sin(θ₀) + cos(θ₁ᵣ) * cos(θ₀) 
     if Z > 0
         θ₁ = atan(√(X^2 + Y^2) / Z)
     elseif Z == 0
@@ -195,7 +187,7 @@ function amagic(incident_particle, θ₁ᵣ, θ₂ᵣ)
 
     if sin(θ₁) ≠ 0
         if X > 0
-            α₁ = atan(Y / Z)
+            α₁ = atan(Y / X)
         elseif X == 0
             α₁ = π - (Y > 0 ? 1 : -1) * π / 2
         else
@@ -205,17 +197,9 @@ function amagic(incident_particle, θ₁ᵣ, θ₂ᵣ)
         α₁ = 0
     end
 
-    X1 = sin(θ₂ᵣ) * cos(α₂ᵣ)
-    Y1 = sin(θ₂ᵣ) * sin(α₂ᵣ)
-    Z1 = cos(θ₂ᵣ)
-
-    Y0 = Y1 * cos(θ₀) + Z1 * sin(θ₀)
-    Z0 = -Y1 * sin(θ₀) + Z1 * cos(θ₀)
-    X0 = X1
-
-    Z = Z0
-    X = X0 * sin(α₀) + Y0 * cos(α₀)
-    Y = -X0 * cos(α₀) + Y0 * cos(α₀)
+    Z =-sin(θ₂ᵣ) * sin(α₂ᵣ) * sin(θ₀) + cos(θ₂ᵣ) * cos(θ₀) 
+    X = sin(θ₂ᵣ) * cos(α₂ᵣ) * sin(α₀) + sin(θ₂ᵣ) * sin(α₂ᵣ) * cos(θ₀) + cos(θ₂ᵣ) * sin(θ₀) * cos(α₀)
+    Y = -sin(θ₂ᵣ) * cos(α₂ᵣ) * cos(α₀) + sin(θ₂ᵣ) * sin(α₂ᵣ) * cos(θ₀) + cos(θ₂ᵣ) * sin(θ₀) * sin(α₀)
 
     if Z > 0
         θ₂ = atan(√(X^2 + Y^2) / Z)
@@ -258,4 +242,4 @@ function initialize(Z₁, Z₂, M₁, M₂, E, ρ)
     return result
 end
 
-initialize(20, 3, 50, 6, 100, 1)
+result = initialize(1, 3, 1, 6, 100, 1)

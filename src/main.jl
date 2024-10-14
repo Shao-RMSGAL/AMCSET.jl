@@ -64,6 +64,10 @@ function create_entries(submit_button)
             "target_density",
             EntryGroup(GtkLabel("Target Density"), GtkEntry(), GtkLabel("g/cm³"), 1.0),
         ),
+        (
+            "bombardments_count",
+            EntryGroup(GtkLabel("Bombardment Count"), GtkEntry(), GtkLabel("particles"), 1.0),
+        ),
     ])
     # Create columns
     text_vbox = GtkBox(:v; homogeneous = true)

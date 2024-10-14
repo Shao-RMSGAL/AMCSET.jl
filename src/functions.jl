@@ -1,57 +1,197 @@
 include("constants.jl")
 
+using ForwardDiff
+using Plots
+using Roots
+using LinearAlgebra
+
 # Reduced mass
-#   M₁ = Incident mass (mass)
-#   M₂ = Target mass (mass)
-Mc(M₁, M₂) = M₁ * M₂ / (M₁   + M₂)
+#   M₁ = Incident mass (u)
+#   M₂ = Target mass (u)
+#   return = Reduced mass (u)
+Mc(M₁::Real, M₂::Real)::Real = M₁ * M₂ / (M₁ + M₂)
 
-# Center-of-mass (CM) total kinetic energy 
-#   Mc = Reduced mass (mass)
-#   V₀ = Incident velocity (speed) 
-Ec(Mc, V₀) = (1/2) * Mc * V₀^2
+# Center-of-mass (CM) total kinetic energy
+#   Mc = Reduced mass (u)
+#   V₀ = Incident velocity (m/s)
+#   return = Center-of-mass energy (eV)
+function Ec(Mc::Real, V₀::Real)::Real
+    factor = ustrip(uconvert(u"eV", 1u"u * (m/s)^2"))
+    return factor * (1 / 2) * Mc * V₀^2
+end
 
-# Center-of-mass totla kinetic energy alternative
-#   E = Incident energy (energy)
-#   M₁ = Incident mass (mass)
-#   M₂ = Target mass (mass)
-Ec(E, M₁, M₂) = E / (1 + M₁/M₂)
+# Incident velocity
+# E = Energy (eV)
+# M = mass (u)
+# return = Velocity (m/s)
+function V₀(E::Real, M::Real)::Real
+    factor = ustrip(uconvert(u"m/s", 1u"√(eV / u)"))
+    return factor * √(2 * E / M)
+end
+
+# Free-flying path length, Eq. 7-25 and L = ∛(1/N)
+# M₁ = Mass of incident particle (u)
+# M₂ = Mass of target particle (u)
+# ε = Reduced energy (unitless)
+# a = Screening length (Å)
+# N = Atom density (atoms/Å³)
+# return = Free flight path lenght (m)
+function L(M₁::Real, M₂::Real, ε::Real, a::Real, N::Real)::Real
+    if ε > 10
+        L = (0.02(1 + (M₁ + M₂))^2 * ε^2 + 0.1ε^1.38) / (4π * a^2 * N * log1p(ε))
+    else
+        L = ∛(1 / N)
+    end
+    return L
+end
+
+# Free-flying path length, low energy (<<Ed), Eq. 7-28
+# pₘₐₓ = Maximum impact parameter (Å)
+# N = Atom density (atoms/Å³)
+# return = Free-flying path length (Å)
+function L(pₘₐₓ, N)
+    return 1 / (N * π * pₘₐₓ^2)
+end
+
+# Impact parameter, Eq. 7-23 and 7-27
+# N = atom density (atoms/Å³)
+# L = length (Å)
+# ε = reduced energy (dimensionless)
+# return = Impact parameter (Å)
+function p(N::Real, L::Real, ε::Real)::Real
+    if ε > 10
+        p = abs(-log(rand()) / (π * N * L)) # Eq. 7-23
+    else
+        p = √(rand() / (π * N^(2 / 3))) # Eq. 7-27
+    end
+    return p
+end
+
+# Maximum reduced impact parameter Eq. 7-37
+# E = Reduced energy (eV)
+# Eₘᵢₙ = Minimum energy (eV)
+# a = Screening length (Å)
+# M₁ = Incident mass (u)
+# M₂ = Target mass (u)
+# return = reduced impact parameter (dimensionless)
+function b_max(E::Real, Eₘᵢₙ::Real, a::Real, M₁::Real, M₂::Real)::Real
+    γ = 4M₁ * M₂ / (M₁ + M₂)^2
+    ε = E / a
+    εₘᵢₙ = Eₘᵢₙ / a
+    ξ = √(ε * εₘᵢₙ / γ)
+    return 1 / (ξ + √ξ + 0.125ξ^0.1)
+end
 
 # Screening length (TF)
 #   Z₁ = Incident atomic number (no units)
 #   Z₂ = Target atomic number (no units)
-a(Z₁, Z₂) = (1/4) * ∛(9π^2/2) * a₀ / (Z₁^(2/3) + Z₂^(2/3))
+a(Z₁, Z₂) = (1 / 4) * ∛(9π^2 / 2) * a₀ / (Z₁^(2 / 3) + Z₂^(2 / 3))
 
-# Reduced energy
-#   a = Screening length (distance)
-#   Ec = Center of mass energy (energy)
+# Universal screening function, Eq. 2-74
+#   x = Reduced radius (r/aᵤ)
+#   return = Screening potential (dimensionsless)
+Φᵤ(x::Real)::Real =
+    0.1818exp(-3.2x) + 0.5099exp(-0.9423x) + 0.2802exp(-0.4028x) + 0.2817exp(-0.2016x)
+
+# Screening length (Universal). Eq. 2-73
 #   Z₁ = Incident atomic number (no units)
 #   Z₂ = Target atomic number (no units)
-ε(a, Ec, Z₁, Z₂) = upreferred(a * Ec / (Z₁ * Z₂ * e_stat ^ 2))
+#   return = Screening length (Å)
+aᵤ(Z₁::Real, Z₂::Real)::Real = (1 / 4) * ∛(9π^2 / 2) * a₀ / (Z₁^(0.23) + Z₂^(0.23))
+
+# Potential from screening function, Eq. 2-69
+# Φ = Screening function as a function of reduced radius(dimensionless) (dimensionless)
+# Z = Atomic number (dimensionless)
+# r = Separation (Å)
+# return = Potential as a function of r(Å) (eV)
+function V(Φ₁::Function, Z₁::Real, Z₂::Real)::Function
+    factor = ustrip(uconvert(u"eV", 1u"(cm^(3/2) * g^(1/2) / s)^2/Å"))
+    return (r) -> factor * Φ₁(r / aᵤ(Z₁, Z₂)) * Z₁ * Z₂ * e_stat^2 / r
+end
+
+# Derivative of function V
+# V = Potential function (eV)
+# r = Radial distance (Å)
+# return = Derivative of potential as a function of r(Å) (eV)
+function dV(V::Function)::Function
+    return (r) -> ForwardDiff.derivative(V, r)
+end
+
+# Collision diameter, Eq. 2-31
+# Z₁ = Incident Z number (unitless)
+# Z₂ = Target Z number (unitless)
+# e = Elementary charge (statC)
+# Mc = Reduced mass (u)
+# V₀ = Incident velocity (m/s)
+# return = Collision diameter (Å)
+function d(Z₁::Real, Z₂::Real, Mc::Real, V₀::Real)::Real
+    factor = ustrip(uconvert(u"Å", 1u"(cm^(3/2) * g^(1/2) / s)^2 / (u * (m/s)^2)"))
+    return factor * 4 * Z₁ * Z₂ * e_stat^2 / (Mc * V₀^2)
+end
+
+# Closest approach, Eq. 7-2
+#   V = Potential function of r(Å) (eV)
+#   Ec = Center of mass energy (eV)
+#   p = Impact parameter (Å)
+#   d = Collision diameter (Å)
+#   return = Closest approach (Å)
+function r₀(V::Function, Ec::Float64, p::Float64, d::Float64)::Real
+    F(r₀) = 1 - V(r₀) / Ec - (p / r₀)^2
+    dF(r₀) = ForwardDiff.derivative(F, float(r₀))
+    r₀_guess = d / 10
+    result = find_zero((F, dF), r₀_guess, Roots.Newton())
+    return result
+end
+
+# Radius of curvature, Eq. 7-4
+# V = Potential as a function of r(Å) (eV)
+# dV = Deriavtive of V with respect to r(Å) (eV/Å)
+# Ec = Center of mass energy (eV)
+# r₀ = Closest approach (Å)
+# return = Radius of curvature (Å)
+function ρ(V::Function, dV::Function, Ec::Real, r₀::Real)::Real
+    return 2abs(Ec - V(r₀)) / (-dV(r₀))
+end
+
+# Reduced energy, Eq. 2-83
+#   a = Screening length (Å)
+#   Ec = Center of mass energy (eV)
+#   Z₁ = Incident atomic number (unitless)
+#   Z₂ = Target atomic number (unitless)
+#   return = Reduced energy (dimensionless)
+function ε(a::Real, Ec::Real, Z₁::Real, Z₂::Real)::Real
+    result = a * Ec / (Z₁ * Z₂ * e_stat^2)
+    factor = ustrip(uconvert(NoUnits, 1u"Å * eV / (cm^(3/2) * g^(1/2) / s)^2"))
+    return factor * result
+end
 
 # Final scattering angle (Magic formula)
-#   p = impact parameter (distance)
-#   r₀ = closest approach (distance)
-#   ρ = CM ρ₁ + ρ₂ radii of curvature (distance)
-#   δ = correction factor (distance)
-function Θ(p, r₀, ρ, Δ, a)
+#   p = impact parameter (Å)
+#   r₀ = closest approach (Å)
+#   ρ = CM ρ₁ + ρ₂ radii of curvature (Å)
+#   Δ = correction factor (dimensionless)
+#   a = screening distance (Å)
+#   return = Scattering angle (radians)
+function Θ(p::Real, r₀::Real, ρ::Real, Δ::Real, a::Real)::Real
     B = p / a
     R₀ = r₀ / a
     Rc = ρ / a
-    return acos((B + Rc + Δ)/(R₀ + Rc)) * 2u"rad"
+    return acos((B + Rc + Δ) / (R₀ + Rc))
 end
 
 # Magic formula correction parameter:
-#   ε = Reduced energy (energy)
-#   p = impact parameter (distance)
-#   a = screening length (distance)
-function Δ(ε, p, a, r₀)
+#   ε = Reduced energy (eV)
+#   p = impact parameter (Å)
+#   a = screening length (Å)
+#   return = Δ (dimensionless)
+function Δ(ε::Real, p::Real, a::Real, r₀::Real)::Real
     C₁, C₂, C₃, C₄, C₅ = C_Δ
-    α = 1 + C₁*ε^(-1/2)
+    α = 1 + C₁ * ε^(-1 / 2)
     β = (C₂ + √ε) / (C₃ + √ε)
     γ = (C₄ + ε) / (C₅ + ε)
     B = p / a
-    A = 2α*ε*B^β
-    G = γ/(√(1 * A^2) - A)
+    A = 2α * ε * B^β
+    G = γ / (√(1 + A^2) - A)
     R₀ = r₀ / a
     return A * (R₀ - B) / (1 + G)
 end
@@ -59,47 +199,163 @@ end
 # High energy sin²(Θ/2) (Only use if ε > 10)
 #   ε = reduced enery
 #   b = reduced impact parameter
-function sin2Θ_2(ε, b)
+#   return = sin²(Θ/2) where Θ is scattering angle (dimensionsless)
+function sin2Θ_2(ε::Real, b::Real)::Real
     return 1 / (1 + (1 + b * (1 + b)) * (2 * ε * b)^2)
 end
 
 # Nuclear energy loss
-#   M₁ = Incident atom mass (mass)
-#   M₂ = Target atom mass (mass)
-#   Θ = Scattering angle (angle)
-T(M₁, M₂, E, Θ) = 4 * M₁ * M₂ / (M₁ + M₂)^2 * E * sin(Θ)^2
+#   M₁ = Incident atom mass (u)
+#   M₂ = Target atom mass (u)
+#   E = Incident energy (eV)
+#   Θ = Scattering angle (rad)
+#   return = Transferred kinetic energy (eV)
+function T(M₁::Real, M₂::Real, E::Real, Θ::Real)::Real
+    return 4 * M₁ * M₂ / (M₁ + M₂)^2 * E * sin(Θ)^2
+end
 
 # Laboratory scattering angle
-#   Θ = CM Scattering angle (angle)
-#   M₁ = Incident mass (mass)
-#   M₂ = Target mass (mass)
-ϑ(Θ, M₁, M₂) = atan(sin(Θ) / (cos(Θ) + (M₁/M₂)))u"rad"
+#   Θ = CM Scattering angle (rad)
+#   M₁ = Incident mass (u)
+#   M₂ = Target mass (u)
+#   return = Relative laboratory scattering angle (rad)
+ϑ(Θ::Real, M₁::Real, M₂::Real) = atan(sin(Θ) / (cos(Θ) + (M₁ / M₂)))
 
 # Azimuthal scattering angle
-ϕ() = 2π*rand()u"rad"
+# return = Azimuthal scattering angle (rad)
+ϕ()::Real = 2π * rand()
 
 # Angle with respect to target normal axis
-#   αᵢ₋₁ = Previous normal axis angle
-#   ϑᵢ = Laboratory scattering angle
-#   ϕ = Azimuthal scattering angle
-αᵢ(αᵢ₋₁, ϑᵢ, ϕᵢ) = acos(cos(αᵢ₋₁) * cos(ϕᵢ) + sin(αᵢ₋₁) * sin(ϑᵢ)*cos(ϕᵢ))u"rad"
+#   αᵢ₋₁ = Previous normal axis angle (rad)
+#   ϑᵢ = Laboratory scattering angle (rad)
+#   ϕ = Azimuthal scattering angle (rad)
+#   return = Absolute lab angle (rad)
+αᵢ(αᵢ₋₁::Real, ϑᵢ::Real, ϕᵢ::Real)::Real =
+    acos(cos(αᵢ₋₁) * cos(ϕᵢ) + sin(αᵢ₋₁) * sin(ϑᵢ) * cos(ϕᵢ))
 
-# Impact parameter (high energy)
-#   N = Number density of atoms (inverse volume)
-#   L = Free flight path length
-p(N, L) = abs(-log(rand())/ (π * N * L))
+# Convert relative angle to absolute angle for incident and target particle
+# α₀ = Initial angle from z-axis (rad)
+# ϕ₀ = Initial azimuthal angle (rad)
+# ϑ₁ = Deflection angle from velocity vector for incident particle (rad)
+# ϑ₁ = Deflection angle from velocity vector for target particle (rad)
+# return (θ₁, α₁, θ₂, α₂) New incident particle (1) and target(2) angles (rad)
+function relative_to_absolute(α₀, ϕ₀, ϑ₁, ϑ₂)
+    α₁ᵣ = rand() * 2π
+    α₂ᵣ = α₁ᵣ + π
+    θ₀ = α₀
+    α₀ = ϕ₀
+    θ₁ᵣ = ϑ₁
+    θ₂ᵣ = ϑ₂
 
-# Impact parameter (low energy)
-#   N = Number density of atoms (inverse volume)
-p(N) = √abs(rand() / (π * N^(2/3)))
 
-# Free flight length
-#   M₁ = Incident particle mass number
-#   M₂ = Target particle mass number
-#   N = Atomic density
-#   a = screening length
-#
-function L(M₁, M₂, N, a, ε)
-    val = uconvert(u"Å", (0.02 * (1 + ustrip(uconvert(u"u", M₁ + M₂)))^2 * ε^2 + 0.1 * ε^1.38) /
-    (4π * a^2 * N * log(1 + ε)))
+    X =
+        sin(θ₁ᵣ) * cos(α₁ᵣ) * sin(α₀) +
+        sin(θ₁ᵣ) * sin(α₁ᵣ) * cos(θ₀) +
+        cos(θ₁ᵣ) * sin(θ₀) * cos(α₀)
+    Y =
+        -sin(θ₁ᵣ) * cos(α₁ᵣ) * cos(α₀) +
+        sin(θ₁ᵣ) * sin(α₁ᵣ) * cos(θ₀) +
+        cos(θ₁ᵣ) * sin(θ₀) * sin(α₀)
+    Z = -sin(θ₁ᵣ) * sin(α₁ᵣ) * sin(θ₀) + cos(θ₁ᵣ) * cos(θ₀)
+    if Z > 0
+        θ₁ = atan(√(X^2 + Y^2) / Z)
+    elseif Z == 0
+        θ₁ = π / 2
+    else
+        θ₁ = π + atan(√(X^2 + Y^2) / Z)
+    end
+
+    if sin(θ₁) ≠ 0
+        if X > 0
+            α₁ = atan(Y / X)
+        elseif X == 0
+            α₁ = π - (Y > 0 ? 1 : -1) * π / 2
+        else
+            α₁ = π + atan(Y / X)
+        end
+    else
+        α₁ = 0
+    end
+
+    Z = -sin(θ₂ᵣ) * sin(α₂ᵣ) * sin(θ₀) + cos(θ₂ᵣ) * cos(θ₀)
+    X =
+        sin(θ₂ᵣ) * cos(α₂ᵣ) * sin(α₀) +
+        sin(θ₂ᵣ) * sin(α₂ᵣ) * cos(θ₀) +
+        cos(θ₂ᵣ) * sin(θ₀) * cos(α₀)
+    Y =
+        -sin(θ₂ᵣ) * cos(α₂ᵣ) * cos(α₀) +
+        sin(θ₂ᵣ) * sin(α₂ᵣ) * cos(θ₀) +
+        cos(θ₂ᵣ) * sin(θ₀) * sin(α₀)
+
+    if Z > 0
+        θ₂ = atan(√(X^2 + Y^2) / Z)
+    elseif Z == 0
+        θ₂ = π / 2
+    else
+        θ₂ = π + atan(√(X^2 + Y^2) / Z)
+    end
+
+    if sin(θ₂) ≠ 0
+        if X > 0
+            α₂ = atan(Y / X)
+        elseif X == 0
+            α₂ = π - (Y > 0 ? 1 : -1) * π / 2
+        else
+            α₂ = π + atan(Y / X)
+        end
+    else
+        α₂ = 0
+    end
+    return θ₁, α₁, θ₂, α₂
+end
+
+# Run a simulation
+# Z₁ = Incident charge (unitless)
+# Z₂ = Target charge (unitless)
+# M₁ = Incident mass (u)
+# M₂ = Target mass (u)
+# E = Energy (eV)
+# num = Number of simulations
+# return = Vector of vector of positions, one for each particle
+function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
+    N = ustrip(AvogadroConstant) * ρ_sub / M₂ / 1E24 # atoms/Å³
+    
+    res = Vector{Vector{Tuple{Float64, Float64, Float64}}}()
+    
+    for i in 1:num
+        pos = (0.0, 0.0, 0.0)
+        αᵢ₋₁ = 0
+        ϕᵢ₋₁ = 0
+        vec = [pos]
+        E = E_init
+        while (E > displacement_threshold)
+            V₀_val = V₀(E, M₁)
+            Mc_val = Mc(M₁, M₂)
+            Ec_val = Ec(Mc_val, V₀_val)
+            V_func = V(Φᵤ, Z₁, Z₂)
+            dV_func = dV(V_func)
+            a_val = aᵤ(Z₁, Z₂)
+            ε_val = ε(a_val, Ec_val, Z₁, Z₂)
+            L_val = L(M₁, M₂, ε_val, a_val, N)
+            p_val = p(N, L_val, ε_val)
+            d_val = d(Z₁, Z₂, Mc_val, V₀_val)
+            r₀_val = r₀(V_func, Ec_val, p_val, d_val)
+            ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
+            Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
+            Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
+            T_val = T(M₁, M₂, E, Θ_val)
+            E = E - T_val
+            ϑ_val = ϑ(Θ_val, M₁, M₂)
+            (αᵢ₋₁, ϕᵢ₋₁, _, _) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
+            pos = (
+            pos[1] + L_val * sin(αᵢ₋₁) * cos(ϕᵢ₋₁),
+            pos[2] + L_val * sin(αᵢ₋₁) * sin(ϕᵢ₋₁),
+            pos[3] + L_val * cos(αᵢ₋₁),
+            )
+            push!(vec, pos)
+        end
+        push!(res, vec)
+    end
+
+    return res
 end

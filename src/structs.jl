@@ -1,7 +1,7 @@
 using Gtk4
 using Unitful
 using PhysicalConstants.CODATA2018
-using Base.Threads
+#  using Base.Threads
 
 struct EntryGroup
     text_label::GtkLabel
@@ -35,14 +35,14 @@ mutable struct Particle
         new(position, velocity, substrate.Z, substrate.M)
 end
 
-# Define our thread-safe structure
-struct ThreadSafeVectorOfVectors
-    data::Vector{Vector{Coordinate}}
-    lock::ReentrantLock
-    counter::Atomic{Int}
-end
+#  # Define our thread-safe structure
+#  struct ThreadSafeVectorOfVectors
+#      data::Vector{Vector{Coordinate}}
+#      lock::ReentrantLock
+#      counter::Atomic{Int}
+#  end
 
-# Constructor
-function ThreadSafeVectorOfVectors()
-    ThreadSafeVectorOfVectors(Vector{Vector{Coordinate}}(), ReentrantLock(), Atomic{Int}(0))
-end
+#  # Constructor
+#  function ThreadSafeVectorOfVectors()
+#      ThreadSafeVectorOfVectors(Vector{Vector{Coordinate}}(), ReentrantLock(), Atomic{Int}(0))
+#  end
