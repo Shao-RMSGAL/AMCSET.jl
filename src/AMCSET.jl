@@ -177,7 +177,6 @@ function connect_actions(window, parameters::Dict)
             Z₂ = parsed_values[][5]
             ρ_sub = parsed_values[][6]
             count = parsed_values[][7]
-
             print("Simulation: ")
             res = @time run_simulation(Z₁, Z₂, M₁, M₂, E, ρ_sub, count)
             print("Plotting: ")
