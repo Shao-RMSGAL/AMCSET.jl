@@ -36,22 +36,18 @@ end
 # ε = Reduced energy (unitless)
 # a = Screening length (Å)
 # N = Atom density (atoms/Å³)
-# return = Free flight path lenght (m)
-function L(M₁::Real, M₂::Real, ε::Real, a::Real, N::Real)::Real
-    if false # ε > 100
-        L = (0.02(1 + (M₁ + M₂))^2 * ε^2 + 0.1ε^1.38) / (4π * a^2 * N * log1p(ε))
+# impuslse_valid = Boolean for whether to do impulse approx
+# return = Free flight path length (m)
+function L(M₁::Real, M₂::Real, ε::Real, a::Real, N::Real, impulse_valid::Bool)::Real
+    if ε > 10 && impulse_valid
+        E = ε * a
+        T_min = displacement_threshold
+        b_max_val = b_max(E, T_min, a, M₁, M₂)
+        L = 1/((b_max_val * a)^2 * π * N)
     else
         L = ∛(1 / N)
     end
     return L
-end
-
-# Free-flying path length, low energy (<<Ed), Eq. 7-28
-# pₘₐₓ = Maximum impact parameter (Å)
-# N = Atom density (atoms/Å³)
-# return = Free-flying path length (Å)
-function L(pₘₐₓ, N)
-    return 1 / (N * π * pₘₐₓ^2)
 end
 
 # Impact parameter, Eq. 7-23 and 7-27
@@ -60,7 +56,7 @@ end
 # ε = reduced energy (dimensionless)
 # return = Impact parameter (Å)
 function p(N::Real, L::Real, ε::Real)::Real
-    if false # ε > 10
+    if ε > 10
         p = abs(-log(rand()) / (π * N * L)) # Eq. 7-23
     else
         p = √(rand() / (π * N^(2 / 3))) # Eq. 7-27
@@ -205,6 +201,16 @@ function sin2Θ_2(ε::Real, b::Real)::Real
     return 1 / (1 + (1 + b * (1 + b)) * (2 * ε * b)^2)
 end
 
+# Efficient nuclear energy loss
+#   M₁ = Incident atom mass (u)
+#   M₂ = Target atom mass (u)
+#   ε = reduced enery
+#   b = reduced impact parameter
+#   return = Transferred kinetic energy (eV)
+function T_eff(M₁::Real, M₂::Real, E::Real, ε::Real, b::Real)::Real
+    return 4 * M₁ * M₂ * E * sin2Θ_2(ε, b) / (M₁ + M₂)^2
+end
+
 # Nuclear energy loss
 #   M₁ = Incident atom mass (u)
 #   M₂ = Target atom mass (u)
@@ -324,8 +330,14 @@ end
 
         res = Vector{Vector{Tuple{Float64, Float64, Float64}}}()
         s_vec = Vector{Future}()
-
-        for i in 1:num
+        V_func = V(Φᵤ, Z₁, Z₂)
+        dV_func = dV(V_func)
+        a_val = aᵤ(Z₁, Z₂)
+        T_min = displacement_threshold
+        impulse_valid = true
+            
+        Mc_val = Mc(M₁, M₂)
+        for _ in 1:num
             s = @spawnat :any begin
                 pos = (0.0, 0.0, 0.0)
                 αᵢ₋₁ = 0
@@ -334,23 +346,29 @@ end
                 E = E_init
                 while (E > displacement_threshold)
                     V₀_val = V₀(E, M₁)
-                    Mc_val = Mc(M₁, M₂)
                     Ec_val = Ec(Mc_val, V₀_val)
-                    V_func = V(Φᵤ, Z₁, Z₂)
-                    dV_func = dV(V_func)
-                    a_val = aᵤ(Z₁, Z₂)
                     ε_val = ε(a_val, Ec_val, Z₁, Z₂)
-                    L_val = L(M₁, M₂, ε_val, a_val, N)
+                    L_val = L(M₁, M₂, ε_val, a_val, N, impulse_valid)
                     p_val = p(N, L_val, ε_val)
-                    d_val = d(Z₁, Z₂, Mc_val, V₀_val)
-                    r₀_val = r₀(V_func, Ec_val, p_val, d_val)
-                    ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
-                    Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
-                    Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
-                    T_val = T(M₁, M₂, E, Θ_val)
-                    E = E - T_val
+                    b_val = p_val / a_val
+                    if ε_val > 10
+                        T_val = T_eff(M₁, M₂, E, ε_val, b_val)
+                        Θ_val = √(asin(sin2Θ_2(ε_val, b_val))*2)
+                    elseif ε_val > T_min
+                        d_val = d(Z₁, Z₂, Mc_val, V₀_val)
+                        r₀_val = r₀(V_func, Ec_val, p_val, d_val)
+                        ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
+                        Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
+                        Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
+                        T_val = T(M₁, M₂, E, Θ_val)
+                    else
+                    end
                     ϑ_val = ϑ(Θ_val, M₁, M₂)
-                    (αᵢ₋₁, ϕᵢ₋₁, _, _) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
+                    (αᵢ₋₁, ϕᵢ₋₁, αₜ, ϕₜ) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
+                    if T_val > displacement_threshold
+                        println("Knockon created! $T_val: $αₜ, $ϕₜ")
+                    end
+                    E = E - T_val
                     pos = (
                     pos[1] + L_val * sin(αᵢ₋₁) * cos(ϕᵢ₋₁),
                     pos[2] + L_val * sin(αᵢ₋₁) * sin(ϕᵢ₋₁),

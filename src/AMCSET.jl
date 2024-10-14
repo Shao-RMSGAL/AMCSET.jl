@@ -122,6 +122,8 @@ function build_parameter_interface()
     save_button = GtkButton("Save as...")
     save_button.action_name = "win.save_as"
     (entries_hbox, parsed_values) = create_entries(submit_button)
+    clear_button = GtkButton("Clear plot")
+    clear_button.action_name = "win.clear"
 
     box = GtkBox(:v)
     box.vexpand = true
@@ -131,6 +133,7 @@ function build_parameter_interface()
     push!(box, progress_bar)
     push!(box, spinner)
     push!(box, save_button)
+    push!(box, clear_button)
     return Dict([
         ("box", box),
         ("submit_button", submit_button),
@@ -220,9 +223,26 @@ function connect_actions(window, parameters::Dict)
         save_dialog(filesave, "Save your results", window)
     end
 
+    function clear_plot(a, par)
+        f = Figure()
+        ax = Axis3(f[1, 1], xlabel = "x (Å)", ylabel = "y (Å)", zlabel = "z (Å)")
+        parameters["f"] = f
+        parameters["ax"] = ax
+        config = parameters["config"]
+        canvas = parameters["canvas"]
+        @guarded draw(canvas) do widget
+            screen = CairoMakie.Screen(f.scene, config, Gtk4.cairo_surface(canvas))
+            CairoMakie.resize!(f.scene, Gtk4.width(widget), Gtk4.height(widget))
+            CairoMakie.cairo_draw(screen, f.scene)
+        end       
+        canvas.draw(canvas)
+        reveal(canvas)
+    end
+
     action_group = GSimpleActionGroup()
     add_action(GActionMap(action_group), "submit", do_submit)
     add_action(GActionMap(action_group), "save_as", save_results)
+    add_action(GActionMap(action_group), "clear", clear_plot)
     push!(window, Gtk4.GLib.GActionGroup(action_group), "win")
 
     eck = GtkEventControllerKey(window)
