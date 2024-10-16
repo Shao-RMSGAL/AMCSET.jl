@@ -43,7 +43,8 @@ function L(M₁::Real, M₂::Real, ε::Real, a::Real, N::Real, impulse_valid::Bo
         E = ε * a
         T_min = displacement_threshold
         b_max_val = b_max(E, T_min, a, M₁, M₂)
-        L = 1/((b_max_val * a)^2 * π * N)
+        L = 1 / ((b_max_val * a)^2 * π * N)
+        #  println("FFP L: $L")
     else
         L = ∛(1 / N)
     end
@@ -54,10 +55,12 @@ end
 # N = atom density (atoms/Å³)
 # L = length (Å)
 # ε = reduced energy (dimensionless)
+# impulse_valid = Bool for whether impulse approximation is done
 # return = Impact parameter (Å)
-function p(N::Real, L::Real, ε::Real)::Real
-    if ε > 10
+function p(N::Real, L::Real, ε::Real, impulse_valid::Bool)::Real
+    if ε > 10 && impulse_valid
         p = abs(-log(rand()) / (π * N * L)) # Eq. 7-23
+    #  println("FFP p: $p")
     else
         p = √(rand() / (π * N^(2 / 3))) # Eq. 7-27
     end
@@ -102,7 +105,7 @@ aᵤ(Z₁::Real, Z₂::Real)::Real = (1 / 4) * ∛(9π^2 / 2) * a₀ / (Z₁^(0.
 # r = Separation (Å)
 # return = Potential as a function of r(Å) (eV)
 function V(Φ₁::Function, Z₁::Real, Z₂::Real)::Function
-    factor = ustrip(uconvert(u"eV", 1u"(cm^(3/2) * g^(1/2) / s)^2/Å"))
+    factor = ustrip(uconvert(u"eV", statC^2 * 1u"1/Å"))
     return (r) -> factor * Φ₁(r / aᵤ(Z₁, Z₂)) * Z₁ * Z₂ * e_stat^2 / r
 end
 
@@ -316,6 +319,56 @@ function relative_to_absolute(α₀, ϕ₀, ϑ₁, ϑ₂)
     return θ₁, α₁, θ₂, α₂
 end
 
+# Low energy electronic energy loss, Eq. 7-45
+# Additional derivation from https://www.iue.tuwien.ac.at/phd/hoessinger/node44.html
+# E = Incident energy (eV)
+# a = Screening distance (Å)
+# r₀ = Closest approach distance (Å)
+# return = Change in energy due to electronic stopping (eV)
+function low_ΔEₑ(
+    E::Real,
+    r₀::Real,
+    aᵤ::Real,
+    Z₁::Real,
+    Z₂::Real,
+    M₁::Real,
+    p_max::Real,
+    v::Real,
+)
+    factor₁ = ustrip(uconvert(u"m/s", (statC)^2 / 1u"J*s"))
+     if v < factor₁ * Z₁^(2 / 3) * e_stat^2 / h̄
+        k_corr = 1 # Linhard correction factor (Unknown)
+        k =
+             8 * π * h̄ * a₀ * √2 * Z₁^(6 / 7) * Z₂ /
+            ((Z₁^(2 / 3) + Z₂^(2 / 3))^(3 / 2) * √M₁)
+        a = aᵤ / 0.3
+    else
+        error("Velocity too high for low-energy regieme")
+    end
+
+
+    return 0.045 * k * √E * exp(-0.3r₀ / a) / (π * a^2)
+end
+
+
+
+# Bethe-Bloch electronic stopping, Eq. 4-15 - 4-39
+# v = Velocity (m/s)
+# return = Stopping energy cross section (eV/Å²)
+# Incomplete
+function S(v::Real)
+    c = ustrip(SpeedOfLightInVacuum)
+    # Bohr classical electron radius, Eq. 4-11
+    r₀ = ustrip(
+        uconvert(u"Å", (e_stat * 1u"cm^(3/2) * g^(1/2) / s")^2 / (1u"me" * (1u"c")^2)),
+    )
+    mₑ = ustrip(ElectronMass)
+    factor = ustrip(uconvert(u"eV * Å^2", 1u"Å^2 * kg * (m/s)^2"))
+    κ = factor * 4π * r₀^2 * mₑ * c^2
+    β² = (v / c)^2
+    f = log(2 * mₑ * c^2 * β² / (1 - β²)) - β² # Eq. 4-11
+end
+
 # Run a simulation
 # Z₁ = Incident charge (unitless)
 # Z₂ = Target charge (unitless)
@@ -324,66 +377,90 @@ end
 # E = Energy (eV)
 # num = Number of simulations
 # return = Vector of vector of positions, one for each particle
-    function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
-        res_lock = ReentrantLock()
-        N = ustrip(AvogadroConstant) * ρ_sub / M₂ / 1E24 # atoms/Å³
+function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
+    res_lock = ReentrantLock()
+    N = ustrip(AvogadroConstant) * ρ_sub / M₂ / 1E24 # atoms/Å³
 
-        res = Vector{Vector{Tuple{Float64, Float64, Float64}}}()
-        s_vec = Vector{Future}()
-        V_func = V(Φᵤ, Z₁, Z₂)
-        dV_func = dV(V_func)
-        a_val = aᵤ(Z₁, Z₂)
-        T_min = displacement_threshold
-        impulse_valid = true
-            
-        Mc_val = Mc(M₁, M₂)
-        for _ in 1:num
-            s = @spawnat :any begin
-                pos = (0.0, 0.0, 0.0)
-                αᵢ₋₁ = 0
-                ϕᵢ₋₁ = 0
-                vec = [pos]
-                E = E_init
-                while (E > displacement_threshold)
-                    V₀_val = V₀(E, M₁)
-                    Ec_val = Ec(Mc_val, V₀_val)
-                    ε_val = ε(a_val, Ec_val, Z₁, Z₂)
-                    L_val = L(M₁, M₂, ε_val, a_val, N, impulse_valid)
-                    p_val = p(N, L_val, ε_val)
-                    b_val = p_val / a_val
-                    if ε_val > 10
-                        T_val = T_eff(M₁, M₂, E, ε_val, b_val)
-                        Θ_val = √(asin(sin2Θ_2(ε_val, b_val))*2)
-                    elseif ε_val > T_min
-                        d_val = d(Z₁, Z₂, Mc_val, V₀_val)
-                        r₀_val = r₀(V_func, Ec_val, p_val, d_val)
-                        ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
-                        Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
-                        Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
-                        T_val = T(M₁, M₂, E, Θ_val)
-                    else
-                    end
-                    ϑ_val = ϑ(Θ_val, M₁, M₂)
-                    (αᵢ₋₁, ϕᵢ₋₁, αₜ, ϕₜ) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
-                    if T_val > displacement_threshold
-                        println("Knockon created! $T_val: $αₜ, $ϕₜ")
-                    end
-                    E = E - T_val
-                    pos = (
+    res = Vector{Vector{Tuple{Float64,Float64,Float64}}}()
+    s_vec = Vector{Future}()
+    V_func = V(Φᵤ, Z₁, Z₂)
+    dV_func = dV(V_func)
+    a_val = aᵤ(Z₁, Z₂)
+    T_min = displacement_threshold
+    impulse_valid = true
+
+    bad_count = 0
+    good_count = 0
+    Mc_val = Mc(M₁, M₂)
+
+    E_vec = []
+    p_vec = []
+    r_vec = []
+        
+    for _ = 1:num
+
+
+        s = @spawnat :any begin
+            pos = (0.0, 0.0, 0.0)
+            αᵢ₋₁ = 0
+            ϕᵢ₋₁ = 0
+            vec = [pos]
+
+
+            E = E_init
+            while (E > displacement_threshold)
+                V₀_val = V₀(E, M₁)
+                Ec_val = Ec(Mc_val, V₀_val)
+                ε_val = ε(a_val, Ec_val, Z₁, Z₂)
+                L_val = L(M₁, M₂, ε_val, a_val, N, impulse_valid)
+                p_val = p(N, L_val, ε_val, impulse_valid)
+                b_val = p_val / a_val
+                if false # ε_val > 10
+                    T_val = T_eff(M₁, M₂, E, ε_val, b_val)
+                    Θ_val = √(asin(sin2Θ_2(ε_val, b_val)) * 2)
+                else
+                    d_val = d(Z₁, Z₂, Mc_val, V₀_val)
+                    r₀_val = r₀(V_func, Ec_val, p_val, d_val)
+                    ρ_val = ρ(V_func, dV_func, Ec_val, r₀_val)
+                    Δ_val = Δ(ε_val, p_val, a_val, r₀_val)
+                    Θ_val = Θ(p_val, r₀_val, ρ_val, Δ_val, a_val)
+                    T_val = T(M₁, M₂, E, Θ_val)
+                end
+                if T_val > 0.1 * E
+                    impulse_valid = false
+                    bad_count += 1
+                    continue
+                else
+                    impulse_valid = true
+                    good_count += 1
+                end
+                ϑ_val = ϑ(Θ_val, M₁, M₂)
+                (αᵢ₋₁, ϕᵢ₋₁, αₜ, ϕₜ) = relative_to_absolute(αᵢ₋₁, ϕᵢ₋₁, ϑ_val, 0)
+                if T_val > displacement_threshold
+                    #  println("Knockon created! $T_val: $αₜ, $ϕₜ")
+                end
+                E = E - T_val
+                pos = (
                     pos[1] + L_val * sin(αᵢ₋₁) * cos(ϕᵢ₋₁),
                     pos[2] + L_val * sin(αᵢ₋₁) * sin(ϕᵢ₋₁),
                     pos[3] + L_val * cos(αᵢ₋₁),
-                    )
-                        push!(vec, pos)
-                end
-                @lock res_lock push!(res, vec)
+                )
+
+                push!(vec, pos); push!(E_vec, Ec_val); push!(p_vec, p_val); push!(r_vec, r₀_val)
             end
-            push!(s_vec, s)
+            @lock res_lock push!(res, vec); 
         end
-
-        for future in s_vec
-            wait(future) 
-        end
-
-        return res
+        push!(s_vec, s)
     end
+
+    for future in s_vec
+        wait(future)
+    end
+
+    println("Bad:Good: $(bad_count/good_count)")
+
+    scatter(E_vec, r_vec./p_vec, label = "r₀/p", markersize = 0.5, xlabel = "CM Energy (eV)", ylabel = "r₀/p", title = "r₀/p vs Ec for H into C12")
+    gui()
+
+    return res
+end

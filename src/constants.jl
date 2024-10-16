@@ -7,6 +7,8 @@ const a₀ = ustrip(uconvert(
     ReducedPlanckConstant / (ElectronMass * SpeedOfLightInVacuum * FineStructureConstant)
     ))
 
+# Reduced Planck constant in J⋅s
+const h̄ = ustrip(ReducedPlanckConstant)
 
 const C_Δ = [
     0.99229  
@@ -18,5 +20,8 @@ const C_Δ = [
 
 # Charge of an electron in statC
 const e_stat = ustrip(ElementaryCharge * 2997924580u"cm^(3/2) * g^(1/2) * s^(-1)/C")
+
+# Statcoulomb (cm^(3/2)⋅g^(1/2)⋅s^(-1))
+const statC = 1u"cm^(3/2)*g^(1/2)*s^(-1)"
 
 displacement_threshold = 40
