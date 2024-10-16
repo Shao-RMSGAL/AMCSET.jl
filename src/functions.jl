@@ -393,9 +393,9 @@ function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
     good_count = 0
     Mc_val = Mc(M₁, M₂)
 
-    E_vec = []
-    p_vec = []
-    r_vec = []
+    #  E_vec = []
+    #  p_vec = []
+    #  r_vec = []
         
     for _ = 1:num
 
@@ -446,7 +446,7 @@ function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
                     pos[3] + L_val * cos(αᵢ₋₁),
                 )
 
-                push!(vec, pos); push!(E_vec, Ec_val); push!(p_vec, p_val); push!(r_vec, r₀_val)
+                push!(vec, pos)# ; push!(E_vec, Ec_val); push!(p_vec, p_val); push!(r_vec, r₀_val)
             end
             @lock res_lock push!(res, vec); 
         end
@@ -459,7 +459,7 @@ function run_simulation(Z₁, Z₂, M₁, M₂, E_init, ρ_sub, num)
 
     println("Bad:Good: $(bad_count/good_count)")
 
-    scatter(E_vec, r_vec./p_vec, label = "r₀/p", markersize = 0.5, xlabel = "CM Energy (eV)", ylabel = "r₀/p", title = "r₀/p vs Ec for H into C12")
+    #  scatter(E_vec, r_vec./p_vec, label = "r₀/p", markersize = 0.5, xlabel = "CM Energy (eV)", ylabel = "r₀/p", title = "r₀/p vs Ec for H into C12")
     gui()
 
     return res
